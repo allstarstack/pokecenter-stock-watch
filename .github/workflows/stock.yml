@@ -1,0 +1,62 @@
+name: pokecenter-stock-watch
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check stock
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          URL="https://www.pokemoncenter-online.com/4521329438030.html"
+
+          html=$(curl -sL \
+            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" \
+            "$URL")
+
+          if ! echo "$html" | grep -q "4521329438030"; then
+            echo "page did not load — skipping"; exit 0
+          fi
+
+          if echo "$html" | grep -q "カートに入れる"; then
+            now="IN_STOCK"
+          else
+            now="OUT_OF_STOCK"
+          fi
+
+          prev=$(cat state.txt 2>/dev/null || echo "UNKNOWN")
+          echo "prev=$prev now=$now"
+
+          if [ "$now" = "IN_STOCK" ] && [ "$prev" != "IN_STOCK" ]; then
+            curl -s \
+              -H "Title: 🟢 PokéCenter: carry case IN STOCK" \
+              -H "Priority: urgent" \
+              -H "Tags: shopping,rotating_light" \
+              -H "Click: $URL" \
+              -d "Front-open carry case (Water type) ¥26,400 — buy now, limit 1/person." \
+              "ntfy.sh/$NTFY_TOPIC"
+          fi
+
+          echo "$now" > state.txt
+
+      - name: Save state
+        run: |
+          git config user.name  "stock-bot"
+          git config user.email "stock-bot@users.noreply.github.com"
+          git add state.txt
+          git commit -m "state: $(cat state.txt)" || echo "no change"
+          git push || echo "nothing to push"
