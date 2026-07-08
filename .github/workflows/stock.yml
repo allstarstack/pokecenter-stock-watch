@@ -1,4 +1,4 @@
-name: pokecenter-stock-watch
+name: stock-watch
 
 on:
   schedule:
@@ -18,45 +18,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check stock
+      - name: Validate products.json
+        run: jq empty products.json
+
+      - name: Check all products
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          URL="https://www.pokemoncenter-online.com/4521329438030.html"
+          mkdir -p state
 
-          html=$(curl -sL \
-            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" \
-            "$URL")
+          jq -c '.[]' products.json | while read -r product; do
+            id=$(echo "$product"     | jq -r '.id')
+            name=$(echo "$product"   | jq -r '.name')
+            url=$(echo "$product"    | jq -r '.url')
+            guard=$(echo "$product"  | jq -r '.guard')
+            signal=$(echo "$product" | jq -r '.signal')
+            mode=$(echo "$product"   | jq -r '.mode')
 
-          if ! echo "$html" | grep -q "4521329438030"; then
-            echo "page did not load — skipping"; exit 0
-          fi
+            html=$(curl -sL \
+              -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" \
+              "$url" || true)
 
-          if echo "$html" | grep -q "カートに入れる"; then
-            now="IN_STOCK"
-          else
-            now="OUT_OF_STOCK"
-          fi
+            if ! echo "$html" | grep -qF "$guard"; then
+              echo "[$id] page did not load — skipping"
+              sleep 2
+              continue
+            fi
 
-          prev=$(cat state.txt 2>/dev/null || echo "UNKNOWN")
-          echo "prev=$prev now=$now"
+            if echo "$html" | grep -qF "$signal"; then
+              found="yes"
+            else
+              found="no"
+            fi
 
-          if [ "$now" = "IN_STOCK" ] && [ "$prev" != "IN_STOCK" ]; then
-            curl -s \
-              -H "Title: 🟢 PokéCenter: carry case IN STOCK" \
-              -H "Priority: urgent" \
-              -H "Tags: shopping,rotating_light" \
-              -H "Click: $URL" \
-              -d "Front-open carry case (Water type) ¥26,400 — buy now, limit 1/person." \
-              "ntfy.sh/$NTFY_TOPIC"
-          fi
+            if [ "$mode" = "present" ]; then
+              [ "$found" = "yes" ] && now="IN_STOCK" || now="OUT_OF_STOCK"
+            else
+              [ "$found" = "no" ] && now="IN_STOCK" || now="OUT_OF_STOCK"
+            fi
 
-          echo "$now" > state.txt
+            prev=$(cat "state/$id.txt" 2>/dev/null || echo "UNKNOWN")
+            echo "[$id] prev=$prev now=$now"
+
+            if [ "$now" = "IN_STOCK" ] && [ "$prev" != "IN_STOCK" ]; then
+              curl -s \
+                -H "Title: IN STOCK: $name" \
+                -H "Priority: urgent" \
+                -H "Tags: shopping,rotating_light" \
+                -H "Click: $url" \
+                -d "$name is showing in stock. $url" \
+                "ntfy.sh/$NTFY_TOPIC" || true
+            fi
+
+            echo "$now" > "state/$id.txt"
+            sleep 2
+          done
 
       - name: Save state
         run: |
           git config user.name  "stock-bot"
           git config user.email "stock-bot@users.noreply.github.com"
-          git add state.txt
-          git commit -m "state: $(cat state.txt)" || echo "no change"
+          git add state/
+          git commit -m "update stock state" || echo "no change"
           git push || echo "nothing to push"
