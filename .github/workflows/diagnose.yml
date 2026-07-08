@@ -1,0 +1,36 @@
+name: diagnose
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fingerprint the sold-out page
+        run: |
+          URL="https://www.pokemoncenter-online.com/4521329438030.html"
+
+          html=$(curl -sL \
+            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" \
+            "$URL")
+
+          size=$(printf '%s' "$html" | wc -c)
+          echo "=== page size: $size bytes ==="
+          if [ "$size" -lt 5000 ]; then
+            echo "!!! PAGE DID NOT LOAD — results below are invalid !!!"
+          fi
+
+          for s in "カートに入れる" "売り切れ" "品切れ" "SOLD OUT" "再入荷" "販売期間外" "抽選" "InStock" "OutOfStock" "LimitedAvailability"; do
+            if printf '%s' "$html" | grep -qiF "$s"; then
+              echo "FOUND      : $s"
+            else
+              echo "not found  : $s"
+            fi
+          done
+
+          echo "=== availability line(s) in page data ==="
+          printf '%s' "$html" | grep -o '"availability"[^,}]*' | head -5 || echo "(none)"
+
+          echo "=== add-to-cart button tag(s) ==="
+          printf '%s' "$html" | grep -o '<button[^>]*>' | grep -iE 'cart|カート' | head -5 || echo "(none)"
